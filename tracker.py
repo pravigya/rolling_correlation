@@ -372,3 +372,89 @@ class RollingCorrelationTracker:
             start_date=aligned.index[0],
             end_date=aligned.index[-1],
         )
+
+    def analyze_multiple_pairs(
+        self,
+        data: pd.DataFrame,
+        pairs: Optional[list[tuple[str, str]]] = None
+    ) -> dict[tuple[str, str], RollingCorrelationResult]:
+        """
+        Analyze multiple asset pairs.
+        
+        Args:
+            data: DataFrame with asset returns.
+            pairs: List of (asset_x, asset_y) tuples. 
+                If None, analyzes all unique pairs.
+        
+        Returns:
+            Dictionary mapping pairs to results.
+        """
+        if pairs is None:
+            # Generate all unique pairs
+            assets = list(data.columns)
+            pairs = [
+                (assets[i], assets[j])
+                for i in range(len(assets))
+                for j in range(i+1, len(assets))
+            ]
+        
+        results = {}
+        for asset_x, asset_y in pairs:
+            try:
+                results[(asset_x, asset_y)] = self.analyze(data, asset_x, asset_y)
+            except ValueError as e:
+                # Skip pairs with insufficient data
+                print(f"Skipping pair ({asset_x}, {asset_y}): {e}")
+        
+        return results
+    
+    def get_correlation_matrix(
+        self,
+        data: pd.DataFrame,
+        as_of_date: Optional[pd.Timestamp] = None
+    ) -> pd.DataFrame:
+        """
+        Get the rolling correlation matrix as of a specific date.
+        
+        Args:
+            data: DataFrame with asset returns.
+            as_of_date: Date to compute matrix for. Defaults to last date.
+        
+        Returns:
+            DataFrame correlation matrix.
+        """
+        assets = list(data.columns)
+        n = len(assets)
+        
+        corr_matrix = pd.DataFrame(
+            np.eye(n),
+            index=assets,
+            columns=assets
+        )
+        
+        for i, asset_x in enumerate(assets):
+            for j, asset_y in enumerate(assets):
+                if i >= j:
+                    continue
+                
+                result = self.analyze(data, asset_x, asset_y)
+                
+                if as_of_date is None:
+                    corr = result.current_correlation
+                else:
+                    if as_of_date in result.correlation_series.index:
+                        corr = result.correlation_series.loc[as_of_date]
+                    else:
+                        # Find nearest date
+                        idx = result.correlation_series.index.get_indexer(
+                            [as_of_date], method='pad'
+                        )[0]
+                        if idx >= 0:
+                            corr = result.correlation_series.iloc[idx]
+                        else:
+                            corr = np.nan
+                
+                corr_matrix.loc[asset_x, asset_y] = corr
+                corr_matrix.loc[asset_y, asset_x] = corr
+        
+        return corr_matrix
